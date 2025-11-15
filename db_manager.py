@@ -120,16 +120,18 @@ class Database:
     def query(self, q: str, params: tuple = ()):
         cur = self.connection.cursor()
         cur.execute(q, params)
-
+        
         if self.db_type == "sqlite":
             rows = [dict(row) for row in cur.fetchall()]
         else:
             # For PostgreSQL & MySQL
             columns = [desc[0] for desc in cur.description]
-            rows = [dict(zip(columns, row)) for row in cur.fetchall()]
+            # Call fetchall() ONCE and store the result
+            results = cur.fetchall() 
+            # Now iterate over the stored result
+            rows = [dict(zip(columns, row)) for row in results] 
 
         return rows
-
     # ----------------------------------------------------------------------
     # INSERT/UPDATE/DELETE
     # ----------------------------------------------------------------------
@@ -174,5 +176,6 @@ class Database:
     def close(self):
         if self.connection:
             self.connection.close()
+
 
 
