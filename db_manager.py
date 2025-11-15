@@ -76,10 +76,10 @@ class Database:
     def create_default_tables(self):
         cursor = self.connection.cursor()
 
-        # Logs table
+        # Logs table (Using SERIAL PRIMARY KEY for Postgres)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 timestamp TEXT,
                 src_ip TEXT,
                 dst_ip TEXT,
@@ -90,10 +90,10 @@ class Database:
             );
         """)
 
-        # Alerts table
+        # Alerts table (Using SERIAL PRIMARY KEY for Postgres)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS alerts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 timestamp TEXT,
                 source_ip TEXT,
                 threat_type TEXT,
@@ -102,10 +102,10 @@ class Database:
             );
         """)
 
-        # Threat summary table
+        # Threat summary table (Using SERIAL PRIMARY KEY for Postgres)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS threat_summary (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 timestamp TEXT,
                 threat_type TEXT,
                 count INTEGER
@@ -174,3 +174,4 @@ class Database:
     def close(self):
         if self.connection:
             self.connection.close()
+
