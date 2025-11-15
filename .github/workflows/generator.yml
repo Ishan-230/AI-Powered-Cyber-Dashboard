@@ -3,7 +3,7 @@ name: Run Threat Generator
 on:
   workflow_dispatch:  # <-- Lets you run it manually
   schedule:
-    - cron: '*/5 * * * *'  # <-- Runs every 5 minutes
+ #   - cron: '*/5 * * * *'  # <-- Runs every 5 minutes
 
 jobs:
   build-and-run:
