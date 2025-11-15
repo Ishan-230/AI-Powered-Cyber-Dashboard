@@ -145,7 +145,7 @@ class Database:
         self.execute(
             """
             INSERT INTO logs (timestamp, src_ip, dst_ip, protocol, threat_type, severity, raw_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
             (ts, src, dst, proto, threat, severity, raw_json),
         )
@@ -154,7 +154,7 @@ class Database:
         self.execute(
             """
             INSERT INTO alerts (timestamp, source_ip, threat_type, severity, description)
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s)
             """,
             (ts, ip, threat, severity, desc),
         )
@@ -163,7 +163,7 @@ class Database:
         self.execute(
             """
             INSERT INTO threat_summary (timestamp, threat_type, count)
-            VALUES (?, ?, ?)
+            VALUES (%s, %s, %s)
             """,
             (ts, threat, count),
         )
@@ -174,4 +174,5 @@ class Database:
     def close(self):
         if self.connection:
             self.connection.close()
+
 
