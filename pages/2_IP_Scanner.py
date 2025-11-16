@@ -1,253 +1,105 @@
+# pages/2_IP_Scanner.py
 import streamlit as st
-import socket
-import json
 import requests
-import maxminddb
-import re
-import asyncio
-import concurrent.futures
-from datetime import datetime
+import pandas as pd
 
-# ---------------------------------------------------------
-# UTIL — Validate IP
-# ---------------------------------------------------------
-def validate_ip(ip):
-    pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
-    if not re.match(pattern, ip):
-        return False
-    return all(0 <= int(x) <= 255 for x in ip.split("."))
-
-
-# ---------------------------------------------------------
-# UTIL — Reverse DNS
-# ---------------------------------------------------------
-def reverse_dns_lookup(ip):
+# This is the (undocumented but common) way to get the user's IP from Streamlit
+try:
+    from streamlit.runtime.scriptrunner import get_script_run_ctx
+except ImportError:
+    # Fallback for older Streamlit versions
     try:
-        host = socket.gethostbyaddr(ip)[0]
-        return host
-    except:
-        return "Unknown / Not Resolved"
+        from streamlit.scriptrunner.script_run_context import get_script_run_ctx
+    except ImportError:
+        get_script_run_ctx = None
 
-
-# ---------------------------------------------------------
-# UTIL — Port Scan
-# ---------------------------------------------------------
-COMMON_PORTS = {
-    21: "FTP",
-    22: "SSH",
-    23: "Telnet",
-    25: "SMTP",
-    53: "DNS",
-    80: "HTTP",
-    110: "POP3",
-    135: "RPC",
-    139: "NetBIOS",
-    143: "IMAP",
-    443: "HTTPS",
-    445: "SMB",
-    587: "SMTP SSL",
-    3306: "MySQL",
-    3389: "RDP",
-    8080: "HTTP Proxy"
-}
-
-async def scan_port(ip, port):
+@st.cache_data(ttl=3600) # Cache for 1 hour
+def get_user_ip():
+    """Get the user's public IP address as seen by the Streamlit server."""
+    if get_script_run_ctx:
+        ctx = get_script_run_ctx()
+        if ctx:
+            return ctx.session_info.client_ip
+    
+    # Fallback if we can't get the context (e.g., very old Streamlit)
     try:
-        conn = asyncio.open_connection(ip, port)
-        reader, writer = await asyncio.wait_for(conn, timeout=0.5)
-        writer.close()
-        return port
-    except:
+        # This will get the IP of the *server* if running locally,
+        # but the client IP if deployed on Streamlit Cloud.
+        return requests.get("https://api.ipify.org").text
+    except Exception:
         return None
 
-async def scan_ports_async(ip):
-    tasks = [scan_port(ip, port) for port in COMMON_PORTS.keys()]
-    results = await asyncio.gather(*tasks)
-    return [r for r in results if r]
-
-
-# ---------------------------------------------------------
-# UTIL — GeoIP Lookup
-# ---------------------------------------------------------
-def geoip_lookup(ip):
+@st.cache_data(ttl=600) # Cache API requests for 10 minutes
+def fetch_ip_details(ip_address):
+    """Fetch real IP details from a public API."""
+    # We use ip-api.com, which is free and requires no key
+    # We request specific fields to get a clean response
+    fields = "status,message,country,regionName,city,zip,lat,lon,isp,org,as,query"
+    url = f"http://ip-api.com/json/{ip_address}?fields={fields}"
     try:
-        # User-uploaded database takes priority
-        if "geoip_path" in st.session_state:
-            db_path = st.session_state["geoip_path"]
-        else:
-            db_path = "geo/GeoLite2-City.mmdb"  # Default bundled file
+        response = requests.get(url)
+        response.raise_for_status() # Raise an error for bad responses
+        data = response.json()
+        return data
+    except requests.RequestException as e:
+        return {"status": "fail", "message": f"API request failed: {e}"}
 
-        reader = maxminddb.open_database(db_path)
-        record = reader.get(ip)
-        reader.close()
+def display_ip_details(data):
+    """Render the IP details in a nice format."""
+    if not data or data.get("status") == "fail":
+        st.error(f"Could not retrieve details. Message: {data.get('message', 'Unknown error')}")
+        return
 
-        if not record:
-            return None
+    st.subheader(f"Scan Results for: {data.get('query')}")
 
-        return {
-            "country": record.get("country", {}).get("names", {}).get("en", "Unknown"),
-            "city": record.get("city", {}).get("names", {}).get("en", "Unknown"),
-            "latitude": record.get("location", {}).get("latitude"),
-            "longitude": record.get("location", {}).get("longitude"),
-            "postal": record.get("postal", {}).get("code", "N/A"),
-            "timezone": record.get("location", {}).get("time_zone", "N/A")
-        }
+    col1, col2 = st.columns(2)
+    
+    # Geolocation
+    col1.metric("Location", f"{data.get('city')}, {data.get('regionName')}")
+    col1.metric("Country", data.get('country'))
+    
+    # Network
+    col2.metric("ISP (Internet Service Provider)", data.get('isp'))
+    col2.metric("Organization", data.get('org'))
+    
+    # Map
+    if data.get('lat') and data.get('lon'):
+        map_data = pd.DataFrame({'lat': [data.get('lat')], 'lon': [data.get('lon')]})
+        st.map(map_data, zoom=8)
+    
+    # Raw Data
+    with st.expander("Show Raw API Data"):
+        st.json(data)
 
-    except Exception as e:
-        return {"error": str(e)}
+# --- Page UI ---
+st.title("🌐 Real IP Address Scanner")
+st.write("Get geolocation and ISP details for your IP or any other IP address.")
+st.divider()
 
+# --- Section 1: User's Own IP ---
+st.header("Your Public IP Address")
+user_ip = get_user_ip()
 
-# ---------------------------------------------------------
-# UTIL — WHOIS / RDAP
-# ---------------------------------------------------------
-def rdap_lookup(ip):
-    try:
-        url = f"https://rdap.db.ripe.net/ip/{ip}"
-        data = requests.get(url, timeout=5).json()
-        return {
-            "name": data.get("name", "Unknown"),
-            "country": data.get("country", "Unknown"),
-            "asn": data.get("handle", "Unknown"),
-            "org": data.get("remarks", [{}])[0].get("description", "N/A")
-        }
-    except:
-        return {"name": "Unknown", "country": "Unknown", "asn": "Unknown", "org": "Unknown"}
+if user_ip:
+    st.info(f"Your public IP address (as seen by this server) is: **{user_ip}**")
+    
+    if st.button("Show My IP Details"):
+        with st.spinner(f"Scanning {user_ip}..."):
+            details = fetch_ip_details(user_ip)
+            display_ip_details(details)
+else:
+    st.error("Could not automatically determine your IP address.")
 
+st.divider()
 
-# ---------------------------------------------------------
-# UTIL — AbuseIPDB
-# ---------------------------------------------------------
-def abuse_ipdb_lookup(ip):
-    if "ABUSEIPDB_KEY" not in st.secrets:
-        return None  # no key
+# --- Section 2: Scan Another IP ---
+st.header("Scan a Specific IP")
+ip_to_scan = st.text_input("Enter IP Address to scan:", placeholder="e.g., 8.8.8.8 or 1.1.1.1")
 
-    try:
-        url = "https://api.abuseipdb.com/api/v2/check"
-        headers = {"Key": st.secrets["ABUSEIPDB_KEY"], "Accept": "application/json"}
-        params = {"ipAddress": ip, "maxAgeInDays": "180"}
-
-        res = requests.get(url, headers=headers, params=params, timeout=5).json()
-        data = res["data"]
-
-        return {
-            "abuse_score": data["abuseConfidenceScore"],
-            "reports": data["totalReports"],
-            "isp": data["isp"],
-            "hostnames": data["hostnames"]
-        }
-    except:
-        return None
-
-
-# ---------------------------------------------------------
-# UTIL — VirusTotal
-# ---------------------------------------------------------
-def virustotal_lookup(ip):
-    if "VT_KEY" not in st.secrets:
-        return None
-
-    try:
-        url = f"https://www.virustotal.com/api/v3/ip_addresses/{ip}"
-        headers = {"x-apikey": st.secrets["VT_KEY"]}
-
-        res = requests.get(url, headers=headers, timeout=5).json()
-        data = res["data"]["attributes"]
-
-        return {
-            "harmless": data["last_analysis_stats"]["harmless"],
-            "malicious": data["last_analysis_stats"]["malicious"],
-            "suspicious": data["last_analysis_stats"]["suspicious"],
-            "undetected": data["last_analysis_stats"]["undetected"]
-        }
-    except:
-        return None
-
-
-# ---------------------------------------------------------
-# STREAMLIT UI
-# ---------------------------------------------------------
-st.title("🌐 Advanced IP Intelligence Scanner")
-
-st.info("This scanner performs **GeoIP*, *WHOIS/RDAP*, *Blacklist checks*, *Port scan*, *DNS*, and *Threat Intelligence lookups*.")  
-
-ip = st.text_input("Enter IP Address:", "8.8.8.8")
-
-uploaded_geo = st.file_uploader("Upload GeoLite2-City.mmdb (Optional)", type=["mmdb"])
-if uploaded_geo:
-    st.session_state["geoip_path"] = f"geoip_upload.mmdb"
-    with open("geoip_upload.mmdb", "wb") as f:
-        f.write(uploaded_geo.read())
-    st.success("Custom GeoIP database loaded.")
-
-
-if st.button("🚀 Scan IP"):
-    if not validate_ip(ip):
-        st.error("Invalid IP address format!")
-        st.stop()
-
-    with st.spinner("Performing full intelligence scan..."):
-
-        # ------------------------------
-        # 1. Reverse DNS
-        # ------------------------------
-        dns_result = reverse_dns_lookup(ip)
-
-        # ------------------------------
-        # 2. GeoIP
-        # ------------------------------
-        geo = geoip_lookup(ip)
-
-        # ------------------------------
-        # 3. RDAP WHOIS
-        # ------------------------------
-        rdap = rdap_lookup(ip)
-
-        # ------------------------------
-        # 4. Threat Intel APIs
-        # ------------------------------
-        abuse = abuse_ipdb_lookup(ip)
-        vt = virustotal_lookup(ip)
-
-        # ------------------------------
-        # 5. Port Scan
-        # ------------------------------
-        open_ports = asyncio.run(scan_ports_async(ip))
-
-    # ---------------------------------------------------------
-    # REPORT OUTPUT
-    # ---------------------------------------------------------
-
-    st.subheader("📌 Basic Information")
-    st.write(f"**IP Address:** {ip}")
-    st.write(f"**Reverse DNS:** {dns_result}")
-    st.write(f"**Scan Time:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-    st.subheader("🌍 GeoIP Information")
-    if "error" in geo:
-        st.error(f"GeoIP Error: {geo['error']}")
+if st.button("Scan IP Address"):
+    if ip_to_scan:
+        with st.spinner(f"Scanning {ip_to_scan}..."):
+            details = fetch_ip_details(ip_to_scan)
+            display_ip_details(details)
     else:
-        st.json(geo)
-
-    st.subheader("🗂 RDAP / WHOIS Information")
-    st.json(rdap)
-
-    st.subheader("🛑 AbuseIPDB (Blacklist Check)")
-    if abuse:
-        st.json(abuse)
-    else:
-        st.info("No AbuseIPDB key provided — skipping.")
-
-    st.subheader("🧪 VirusTotal Reputation")
-    if vt:
-        st.json(vt)
-    else:
-        st.info("No VirusTotal key provided — skipping.")
-
-    st.subheader("🔌 Port Scan Result")
-    if open_ports:
-        table = [{"port": p, "service": COMMON_PORTS[p]} for p in open_ports]
-        st.table(table)
-    else:
-        st.success("No common ports open.")
-
-    st.success("Scan Complete ✔")
+        st.warning("Please enter an IP address to scan.")
