@@ -1,160 +1,132 @@
+# pages/2_IP_Scanner.py
 import streamlit as st
 import requests
-import socket
-import geoip2.database
-import os
+import pandas as pd
+import re  # <-- Import regex for validation
 
-st.set_page_config(page_title="IP Scanner", page_icon="🌐")
-
-st.title("🌐 Advanced IP Address Scanner (WhatIsMyIPAddress Style)")
-
-# ==========================
-# Load GeoIP DB
-# ==========================
-GEOIP_DB_PATH = st.secrets.get("GEOIP_DB", "geo/GeoLite2-City.mmdb")
-
-def geo_lookup(ip):
-    if not os.path.exists(GEOIP_DB_PATH):
-        return {"error": f"GeoIP database not found at {GEOIP_DB_PATH}"}
+# This is the (undocumented but common) way to get the user's IP from Streamlit
+try:
+    from streamlit.runtime.scriptrunner import get_script_run_ctx
+except ImportError:
+    # Fallback for older Streamlit versions
     try:
-        reader = geoip2.database.Reader(GEOIP_DB_PATH)
-        rec = reader.city(ip)
-        isp = reader.asn(ip) if hasattr(reader, "asn") else None
+        from streamlit.scriptrunner.script_run_context import get_script_run_ctx
+    except ImportError:
+        get_script_run_ctx = None
 
-        return {
-            "ip": ip,
-            "country": rec.country.name,
-            "country_iso": rec.country.iso_code,
-            "city": rec.city.name,
-            "latitude": rec.location.latitude,
-            "longitude": rec.location.longitude,
-            "timezone": rec.location.time_zone,
-            "postal": rec.postal.code,
-            "asn": isp.autonomous_system_number if isp else None,
-            "asn_org": isp.autonomous_system_organization if isp else None,
-        }
-    except Exception as e:
-        return {"error": str(e)}
+def validate_ip(ip):
+    """Validate IP address format"""
+    pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
+    if not re.match(pattern, ip):
+        return False
+    parts = ip.split('.')
+    return all(0 <= int(part) <= 255 for part in parts)
 
-# ==========================
-# Reverse DNS
-# ==========================
-def reverse_dns(ip):
+@st.cache_data(ttl=3600) # Cache for 1 hour
+def get_user_ip():
+    """Get the user's public IP address as seen by the Streamlit server."""
+    client_ip = None
     try:
-        return socket.gethostbyaddr(ip)[0]
-    except:
-        return "Not found"
-
-# ==========================
-# Get User's Public IP
-# ==========================
-def get_my_ip():
-    try:
-        return requests.get("https://api.ipify.org").text.strip()
-    except:
+        # --- NEW: Try external APIs first, as they are more reliable ---
         try:
-            return requests.get("https://checkip.amazonaws.com").text.strip()
-        except:
-            return "Unavailable"
+            client_ip = requests.get("https://api.ipify.org", timeout=5).text
+        except Exception:
+            # Fallback to a different service if ipify fails
+            try:
+                response = requests.get("http://ip-api.com/json/?fields=query", timeout=5).json()
+                client_ip = response.get('query')
+            except Exception:
+                pass # Both external APIs failed
 
-# ==========================
-# Blacklist Check (optional)
-# ==========================
-ABUSE_KEY = st.secrets.get("ABUSEIPDB_KEY", "")
+        # --- Try the context method as a last resort ---
+        if client_ip is None and get_script_run_ctx:
+            ctx = get_script_run_ctx()
+            if ctx and ctx.session_info:
+                client_ip = ctx.session_info.client_ip
+            
+    except Exception:
+        client_ip = None
+            
+    return client_ip
 
-def abuseipdb_check(ip):
-    if not ABUSE_KEY:
-        return {"skipped": True, "reason": "Missing ABUSEIPDB_KEY"}
+@st.cache_data(ttl=600) # Cache API requests for 10 minutes
+def fetch_ip_details(ip_address):
+    """Fetch real IP details from a public API."""
+    fields = "status,message,country,regionName,city,zip,lat,lon,isp,org,as,query"
+    url = f"http://ip-api.com/json/{ip_address}?fields={fields}"
     try:
-        url = "https://api.abuseipdb.com/api/v2/check"
-        params = {"ipAddress": ip, "maxAgeInDays": 60}
-        headers = {"Key": ABUSE_KEY, "Accept": "application/json"}
-
-        r = requests.get(url, params=params, headers=headers, timeout=10)
-        data = r.json()
-
-        if "data" in data:
-            return {
-                "is_blacklisted": data["data"]["abuseConfidenceScore"] > 0,
-                "score": data["data"]["abuseConfidenceScore"],
-                "details": data["data"]
-            }
+        response = requests.get(url, timeout=5)
+        response.raise_for_status() # Raise an error for bad responses
+        data = response.json()
         return data
-    except Exception as e:
-        return {"error": str(e)}
+    except requests.RequestException as e:
+        return {"status": "fail", "message": f"API request failed: {e}"}
 
-# ==========================
-# INPUT SECTION
-# ==========================
-st.subheader("🔍 Enter an IP address or use your own")
-
-col1, col2 = st.columns([2,1])
-
-with col1:
-    ip_input = st.text_input("Enter IP address", "")
-
-with col2:
-    if st.button("Use My IP"):
-        ip_input = get_my_ip()
-        st.success(f"Your IP: {ip_input}")
-
-if not ip_input:
-    st.stop()
-
-# ==========================
-# SCAN BUTTON
-# ==========================
-if st.button("Scan IP"):
-    with st.spinner(f"Scanning {ip_input}..."):
-        geo = geo_lookup(ip_input)
-        dns = reverse_dns(ip_input)
-        abuse = abuseipdb_check(ip_input)
-
-    # ==========================
-    # OUTPUT SECTION
-    # ==========================
-
-    st.subheader("📊 IP Address Information")
-
-    colA, colB = st.columns(2)
-
-    with colA:
-        st.markdown("### 🌍 Location")
-        st.write(f"**Country:** {geo.get('country')}")
-        st.write(f"**City:** {geo.get('city')}")
-        st.write(f"**Latitude:** {geo.get('latitude')}")
-        st.write(f"**Longitude:** {geo.get('longitude')}")
-        st.write(f"**Timezone:** {geo.get('timezone')}")
-        st.write(f"**Postal Code:** {geo.get('postal')}")
-
-    with colB:
-        st.markdown("### 🛰️ Network Info")
-        st.write(f"**ASN:** {geo.get('asn')}")
-        st.write(f"**ISP / Org:** {geo.get('asn_org')}")
-        st.write(f"**Reverse DNS:** {dns}")
-
-    st.markdown("---")
-    st.subheader("🛑 Blacklist & Reputation")
-
-    if "skipped" in abuse:
-        st.info("Blacklist check skipped — set your ABUSEIPDB_KEY in secrets.toml")
-    elif "error" in abuse:
-        st.error(f"Blacklist lookup failed: {abuse['error']}")
-    else:
-        score = abuse.get("score", 0)
-        st.metric("Abuse Confidence Score", score)
-
-        if score > 50:
-            st.error("⚠️ This IP is likely malicious!")
-        elif score > 0:
-            st.warning("⚠️ This IP has some reported abuse.")
+def display_ip_details(data):
+    """Render the IP details in a nice format."""
+    if not data or data.get("status") == "fail":
+        # Check for the API's specific "invalid query" message
+        if data.get("message") == "invalid query":
+            st.error(f"Could not retrieve details. The API reported 'invalid query'. Please ensure '{data.get('query')}' is a valid public IP address.")
         else:
-            st.success("✔️ No known abuse reports found.")
+            st.error(f"Could not retrieve details. Message: {data.get('message', 'Unknown error')}")
+        return
 
-    st.markdown("---")
+    st.subheader(f"Scan Results for: {data.get('query')}")
 
-    st.json({
-        "Geo Data": geo,
-        "Reverse DNS": dns,
-        "AbuseIPDB": abuse
-    })
+    col1, col2 = st.columns(2)
+    
+    # Geolocation
+    col1.metric("Location", f"{data.get('city', 'N/A')}, {data.get('regionName', 'N/A')}")
+    col1.metric("Country", data.get('country', 'N/A'))
+    
+    # Network
+    col2.metric("ISP (Internet Service Provider)", data.get('isp', 'N/A'))
+    col2.metric("Organization", data.get('org', 'N/A'))
+    
+    # Map
+    if data.get('lat') and data.get('lon'):
+        map_data = pd.DataFrame({'lat': [data.get('lat')], 'lon': [data.get('lon')]})
+        st.map(map_data, zoom=8)
+    
+    # Raw Data
+    with st.expander("Show Raw API Data"):
+        st.json(data)
+
+# --- Page UI ---
+st.title("🌐 Real IP Address Scanner")
+st.write("Get geolocation and ISP details for your IP or any other IP address.")
+st.divider()
+
+# --- Section 1: User's Own IP ---
+st.header("Your Public IP Address")
+user_ip = get_user_ip()
+
+if user_ip:
+    st.info(f"Your public IP address (as seen by this server) is: **{user_ip}**")
+    
+    if st.button("Show My IP Details"):
+        with st.spinner(f"Scanning {user_ip}..."):
+            details = fetch_ip_details(user_ip)
+            display_ip_details(details)
+else:
+    # This error message will now only show if all 3 methods fail
+    st.error("Could not automatically determine your IP address. This may be due to a server network issue.")
+
+st.divider()
+
+# --- Section 2: Scan Another IP ---
+st.header("Scan a Specific IP")
+ip_to_scan = st.text_input("Enter IP Address to scan:", placeholder="e.g., 8.8.8.8 or 1.1.1.1")
+
+if st.button("Scan IP Address"):
+    # --- THIS IS THE FIX for "invalid query" ---
+    if not ip_to_scan:
+        st.warning("Please enter an IP address to scan.")
+    elif not validate_ip(ip_to_scan):
+        st.error(f"Invalid IP address format: '{ip_to_scan}'. Please enter a valid IPv4 address (e.g., 8.8.8.8).")
+    else:
+        # Only run if the input is not empty and is valid
+        with st.spinner(f"Scanning {ip_to_scan}..."):
+            details = fetch_ip_details(ip_to_scan)
+            display_ip_details(details)
