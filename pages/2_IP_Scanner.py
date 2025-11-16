@@ -16,18 +16,26 @@ except ImportError:
 @st.cache_data(ttl=3600) # Cache for 1 hour
 def get_user_ip():
     """Get the user's public IP address as seen by the Streamlit server."""
-    if get_script_run_ctx:
-        ctx = get_script_run_ctx()
-        if ctx:
-            return ctx.session_info.client_ip
-    
-    # Fallback if we can't get the context (e.g., very old Streamlit)
+    client_ip = None
     try:
-        # This will get the IP of the *server* if running locally,
-        # but the client IP if deployed on Streamlit Cloud.
-        return requests.get("https://api.ipify.org").text
+        if get_script_run_ctx:
+            ctx = get_script_run_ctx()
+            # --- THIS IS THE FIX ---
+            # We must check if ctx AND ctx.session_info exist
+            if ctx and ctx.session_info:
+                client_ip = ctx.session_info.client_ip
+        
+        # Fallback if the context method fails or returns None
+        if client_ip is None:
+            # This will get the client IP if deployed on Streamlit Cloud,
+            # or the server IP if running locally.
+            client_ip = requests.get("https://api.ipify.org", timeout=5).text
+            
     except Exception:
-        return None
+        # Final fallback
+        client_ip = None
+            
+    return client_ip
 
 @st.cache_data(ttl=600) # Cache API requests for 10 minutes
 def fetch_ip_details(ip_address):
@@ -37,7 +45,7 @@ def fetch_ip_details(ip_address):
     fields = "status,message,country,regionName,city,zip,lat,lon,isp,org,as,query"
     url = f"http://ip-api.com/json/{ip_address}?fields={fields}"
     try:
-        response = requests.get(url)
+        response = requests.get(url, timeout=5)
         response.raise_for_status() # Raise an error for bad responses
         data = response.json()
         return data
@@ -55,12 +63,12 @@ def display_ip_details(data):
     col1, col2 = st.columns(2)
     
     # Geolocation
-    col1.metric("Location", f"{data.get('city')}, {data.get('regionName')}")
-    col1.metric("Country", data.get('country'))
+    col1.metric("Location", f"{data.get('city', 'N/A')}, {data.get('regionName', 'N/A')}")
+    col1.metric("Country", data.get('country', 'N/A'))
     
     # Network
-    col2.metric("ISP (Internet Service Provider)", data.get('isp'))
-    col2.metric("Organization", data.get('org'))
+    col2.metric("ISP (Internet Service Provider)", data.get('isp', 'N/A'))
+    col2.metric("Organization", data.get('org', 'N/A'))
     
     # Map
     if data.get('lat') and data.get('lon'):
