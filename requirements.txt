@@ -22,3 +22,9 @@ typing-extensions
 
 # GeoIP
 geoip2
+
+# WHOIS / RDAP (optional but recommended)
+ipwhois
+
+# For reading MaxMind DB files
+maxminddb
