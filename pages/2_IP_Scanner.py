@@ -1,100 +1,62 @@
 import streamlit as st
 import requests
 from datetime import datetime
-import re
 
-# ---------- Utility: Validate IP ----------
-def validate_ip(ip):
-    pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
-    if not re.match(pattern, ip):
-        return False
-    parts = ip.split(".")
-    return all(0 <= int(p) <= 255 for p in parts)
+def keycdn_lookup(ip):
+    url = f"https://tools.keycdn.com/geo.json?host={ip}"
+    headers = {"User-Agent": "keycdn-tools:https://yourdomain.com"}
 
+    try:
+        response = requests.get(url, headers=headers, timeout=5).json()
 
-# ---------- API Lookup ----------
-def lookup_ip(ip: str):
-    """Fetch complete IP details using ipwho.is (free, no key)."""
-    url = f"https://ipwho.is/{ip}"
-    response = requests.get(url, timeout=5).json()
-    return response
+        if "data" not in response or "geo" not in response["data"]:
+            return None
 
+        return response["data"]["geo"]
 
-# ---------- UI ----------
-st.title("🌐 Real-Time IP Address Scanner (Powered by ipwho.is)")
-st.write("Enter any IPv4/IPv6 address to fetch **live geolocation, ISP, security flags, proxy/Tor detection, ASN, and more**.")
+    except Exception as e:
+        return {"error": str(e)}
 
-ip = st.text_input("Enter IP Address:", value="8.8.8.8")
+st.title("🌐 Real-Time IP Address Scanner (Powered by KeyCDN Geo API)")
+st.markdown("Enter any IPv4/IPv6 address to get detailed IP information.")
 
-if st.button("🔍 Scan Now"):
-    if not validate_ip(ip):
-        st.error("❌ Invalid IP address format!")
-        st.stop()
+ip = st.text_input("Enter IP Address:", "8.8.8.8")
 
-    with st.spinner(f"Fetching real-time data for IP: {ip} ..."):
-        data = lookup_ip(ip)
+if st.button("Scan IP"):
+    with st.spinner(f"Fetching details for {ip}..."):
+        data = keycdn_lookup(ip)
 
-    if not data.get("success", False):
-        st.error("❌ Lookup failed. The IP may be invalid or unreachable.")
-        st.json(data)
-        st.stop()
+        if not data or "error" in data:
+            st.error("Failed to fetch IP details. Please try again.")
+            st.json(data)
+        else:
+            st.success("Lookup Successful!")
 
-    st.success("✅ IP Lookup Successful")
+            st.header("📊 IP Address Information")
 
-    st.header("📊 IP Address Information")
-    st.write(f"**IP:** {data['ip']}")
-    st.write(f"**Type:** {data.get('type', 'Unknown')}")
-    st.write(f"**Continent:** {data.get('continent', 'N/A')}")
-    st.write(f"**Country:** {data.get('country', 'N/A')} ({data.get('country_code', '')})")
-    st.write(f"**Region:** {data.get('region', 'N/A')}")
-    st.write(f"**City:** {data.get('city', 'N/A')}")
-    st.write(f"**Timezone:** {data.get('timezone', {}).get('id', 'N/A')}")
-    st.write(f"**Local Time:** {data.get('timezone', {}).get('current_time', 'N/A')}")
-    st.write(f"**Latitude:** {data.get('latitude', 'N/A')}")
-    st.write(f"**Longitude:** {data.get('longitude', 'N/A')}")
-    st.write(f"**Postal Code:** {data.get('postal', 'N/A')}")
+            st.write(f"**IP:** {data.get('ip')}")
+            st.write(f"**RDNS:** {data.get('rdns')}")
+            st.write(f"**ASN:** {data.get('asn')}")
+            st.write(f"**ISP:** {data.get('provider')}")
 
-    st.divider()
+            st.header("🌍 Location")
+            st.write(f"**Continent:** {data.get('continent_name')}")
+            st.write(f"**Country:** {data.get('country_name')} ({data.get('country_code')})")
+            st.write(f"**Region:** {data.get('region_name')}")
+            st.write(f"**City:** {data.get('city')}")
+            st.write(f"**Postal Code:** {data.get('postal_code')}")
+            st.write(f"**Timezone:** {data.get('timezone')}")
+            st.write(f"**Latitude:** {data.get('latitude')}")
+            st.write(f"**Longitude:** {data.get('longitude')}")
 
-    # ---------- NETWORK INFO ----------
-    st.header("🛰 Network Information")
-    conn = data.get("connection", {})
+            st.header("🛰️ Network Info")
+            st.write(f"**Network:** {data.get('network')}")
+            st.write(f"**Organization:** {data.get('organization')}")
+            st.write(f"**Is EU?** {data.get('is_eu')}")
 
-    st.write(f"**ASN:** {conn.get('asn', 'N/A')}")
-    st.write(f"**ISP:** {conn.get('isp', 'N/A')}")
-    st.write(f"**Organization:** {conn.get('org', 'N/A')}")
-    st.write(f"**Domain:** {conn.get('domain', 'N/A')}")
+            st.header("🛡️ Device Information")
+            st.write(f"**Device Type:** {data.get('device_type')}")
+            st.write(f"**User Agent:** {data.get('user_agent')}")
 
-    st.divider()
-
-    # ---------- SECURITY ----------
-    st.header("🛡 Security Detection")
-    sec = data.get("security", {})
-
-    st.write("**Proxy:**", "🟢 No" if not sec.get("proxy") else "🔴 Yes")
-    st.write("**VPN:**", "🟢 No" if not sec.get("vpn") else "🔴 Yes")
-    st.write("**TOR:**", "🟢 No" if not sec.get("tor") else "🔴 Yes")
-    st.write("**Hosting:**", "🟢 No" if not sec.get("hosting") else "⚠️ Hosting Provider")
-    st.write("**Threat Level:**", sec.get("threat_level", "Unknown"))
-    st.write("**Threat Types:**", sec.get("threat_types", "None"))
-
-    st.divider()
-
-    # ---------- MAP ----------
-    st.header("🗺 Geolocation Map")
-    lat = data.get("latitude")
-    lon = data.get("longitude")
-
-    if lat and lon:
-        st.map({"lat": [lat], "lon": [lon]})
-    else:
-        st.warning("Location data unavailable — map cannot be displayed.")
-
-    st.divider()
-
-    # ---------- RAW DATA ----------
-    with st.expander("📦 Raw API Response (Debugging)"):
-        st.json(data)
-
-    # ---------- FOOTER ----------
-    st.caption("Data retrieved via https://ipwho.is — No API key required.")
+            st.header("📝 Raw JSON Response")
+            st.json(data)
