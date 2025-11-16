@@ -1,62 +1,100 @@
 import streamlit as st
 import requests
+import re
 from datetime import datetime
 
+st.set_page_config(page_title="IP Scanner", page_icon="🌐")
+
+
+# ---------------------------
+# IP Validation
+# ---------------------------
+def validate_ip(ip):
+    pattern = r"^(\d{1,3}\.){3}\d{1,3}$"
+    if not re.match(pattern, ip):
+        return False
+    parts = ip.split(".")
+    return all(0 <= int(part) <= 255 for part in parts)
+
+
+# ---------------------------
+# KeyCDN Geo API Lookup
+# ---------------------------
 def keycdn_lookup(ip):
     url = f"https://tools.keycdn.com/geo.json?host={ip}"
-    headers = {"User-Agent": "keycdn-tools:https://yourdomain.com"}
+    headers = {"User-Agent": "keycdn-tools:https://your-app.com"}
 
     try:
-        response = requests.get(url, headers=headers, timeout=5).json()
+        resp = requests.get(url, headers=headers, timeout=6)
+        data = resp.json()
 
-        if "data" not in response or "geo" not in response["data"]:
-            return None
+        # Handle reserved / invalid IP responses
+        if data.get("status") == "error":
+            return {"error": data.get("description", "Lookup failed.")}
 
-        return response["data"]["geo"]
+        geo = data.get("data", {}).get("geo", None)
 
+        if not geo:
+            return {"error": "Geo information not found."}
+
+        return geo
     except Exception as e:
         return {"error": str(e)}
 
-st.title("🌐 Real-Time IP Address Scanner (Powered by KeyCDN Geo API)")
-st.markdown("Enter any IPv4/IPv6 address to get detailed IP information.")
 
+# ---------------------------
+# UI
+# ---------------------------
+st.title("🌐 Real-Time IP Address Scanner (KeyCDN Powered)")
+st.write("Enter any IPv4/IPv6 address to fetch **geolocation**, **ISP**, **ASN**, **RDNS**, and more.")
+
+
+# ---------------------------
+# Input
+# ---------------------------
 ip = st.text_input("Enter IP Address:", "8.8.8.8")
 
 if st.button("Scan IP"):
-    with st.spinner(f"Fetching details for {ip}..."):
-        data = keycdn_lookup(ip)
+    if not validate_ip(ip):
+        st.error("❌ Invalid IP address format")
+    else:
+        with st.spinner(f"Scanning {ip}..."):
+            info = keycdn_lookup(ip)
 
-        if not data or "error" in data:
-            st.error("Failed to fetch IP details. Please try again.")
-            st.json(data)
+        if "error" in info:
+            st.error(f"❌ Lookup failed — {info['error']}")
         else:
-            st.success("Lookup Successful!")
+            # ---------------------------
+            # SUCCESS OUTPUT
+            # ---------------------------
+            st.success("🔍 Lookup Successful!")
 
             st.header("📊 IP Address Information")
-
-            st.write(f"**IP:** {data.get('ip')}")
-            st.write(f"**RDNS:** {data.get('rdns')}")
-            st.write(f"**ASN:** {data.get('asn')}")
-            st.write(f"**ISP:** {data.get('provider')}")
+            st.write(f"**IP:** {info.get('ip')}")
+            st.write(f"**Type:** {info.get('type')}")
+            st.write(f"**RDNS:** {info.get('rdns')}")
 
             st.header("🌍 Location")
-            st.write(f"**Continent:** {data.get('continent_name')}")
-            st.write(f"**Country:** {data.get('country_name')} ({data.get('country_code')})")
-            st.write(f"**Region:** {data.get('region_name')}")
-            st.write(f"**City:** {data.get('city')}")
-            st.write(f"**Postal Code:** {data.get('postal_code')}")
-            st.write(f"**Timezone:** {data.get('timezone')}")
-            st.write(f"**Latitude:** {data.get('latitude')}")
-            st.write(f"**Longitude:** {data.get('longitude')}")
+            st.write(f"**Continent:** {info.get('continent_name')}")
+            st.write(f"**Country:** {info.get('country_name')} ({info.get('country_code')})")
+            st.write(f"**Region:** {info.get('region_name')}")
+            st.write(f"**City:** {info.get('city')}")
+            st.write(f"**Timezone:** {info.get('timezone')}")
+            st.write(f"**Local Time:** {info.get('local_time')}")
+            st.write(f"**Latitude:** {info.get('latitude')}")
+            st.write(f"**Longitude:** {info.get('longitude')}")
+            st.write(f"**Postal Code:** {info.get('postal_code')}")
 
-            st.header("🛰️ Network Info")
-            st.write(f"**Network:** {data.get('network')}")
-            st.write(f"**Organization:** {data.get('organization')}")
-            st.write(f"**Is EU?** {data.get('is_eu')}")
+            st.header("🛰️ Network & ISP")
+            st.write(f"**ASN:** {info.get('asn')}")
+            st.write(f"**ISP / Provider:** {info.get('provider')}")
+            st.write(f"**Network:** {info.get('network')}")
+            st.write(f"**Organization:** {info.get('organization')}")
 
-            st.header("🛡️ Device Information")
-            st.write(f"**Device Type:** {data.get('device_type')}")
-            st.write(f"**User Agent:** {data.get('user_agent')}")
+            st.header("🛡️ Additional Info")
+            st.write(f"**Is EU:** {info.get('is_eu')}")
+            st.write(f"**Device Type:** {info.get('device_type')}")
+            st.write(f"**User Agent:** {info.get('user_agent')}")
 
             st.header("📝 Raw JSON Response")
-            st.json(data)
+            st.json(info)
